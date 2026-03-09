@@ -1,0 +1,14 @@
+apiVersion: v2
+name: sentinela
+description: SENTINELA Global Intelligence Fusion Platform
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - intelligence
+  - osint
+  - analytics
+  - security
+maintainers:
+  - name: SENTINELA Team
+home: https://github.com/iccywolfy/Sentinela

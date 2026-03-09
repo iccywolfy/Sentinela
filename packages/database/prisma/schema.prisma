@@ -1,0 +1,651 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// SENTINELA — Prisma Schema
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Tenant ───────────────────────────────────────────────────────────────────
+model Tenant {
+  id                    String   @id @default(uuid())
+  name                  String
+  slug                  String   @unique
+  isActive              Boolean  @default(true)
+  dataResidencyRegion   String?
+  retentionPolicyDays   Int      @default(2555) // 7 years
+  maxSources            Int      @default(200)
+  maxUsers              Int      @default(50)
+  featuresJson          Json     @default("{}")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  users         User[]
+  teams         Team[]
+  sources       Source[]
+  events        Event[]
+  correlations  Correlation[]
+  alerts        Alert[]
+  alertRules    AlertRule[]
+  watchlists    Watchlist[]
+  cases         InvestigativeCase[]
+  collections   Collection[]
+  reports       Report[]
+  reportTemplates ReportTemplate[]
+  scoreModels   ScoreModel[]
+  auditLogs     AuditLog[]
+  correlationRules CorrelationRule[]
+
+  @@map("tenants")
+}
+
+// ─── User / Auth ──────────────────────────────────────────────────────────────
+model User {
+  id              String    @id @default(uuid())
+  email           String
+  name            String
+  role            String    @default("analyst")
+  keycloakId      String?   @unique
+  isActive        Boolean   @default(true)
+  lastLoginAt     DateTime?
+  preferencesJson Json      @default("{}")
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  teamMembers TeamMember[]
+  auditLogs   AuditLog[]
+  cases       InvestigativeCase[] @relation("CaseLead")
+  caseNotes   CaseNote[]
+
+  @@unique([email, tenantId])
+  @@map("users")
+}
+
+model Team {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  leadId      String?
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members TeamMember[]
+
+  @@map("teams")
+}
+
+model TeamMember {
+  userId    String
+  teamId    String
+  user      User   @relation(fields: [userId], references: [id])
+  team      Team   @relation(fields: [teamId], references: [id])
+
+  @@id([userId, teamId])
+  @@map("team_members")
+}
+
+// ─── Sources (M1) ─────────────────────────────────────────────────────────────
+model Source {
+  id                  String    @id @default(uuid())
+  name                String
+  category            String
+  countryOfOrigin     String?
+  language            String    @default("en")
+  url                 String
+  collectionMethod    String
+  periodicity         String    @default("daily")
+  credibilityScore    Float     @default(0.5)
+  relevanceScore      Float     @default(0.5)
+  stabilityScore      Float     @default(1.0)
+  usageRestrictions   String?
+  isActive            Boolean   @default(true)
+  lastCollectedAt     DateTime?
+  errorCount          Int       @default(0)
+  configJson          Json      @default("{}")
+  tenantId            String
+  tenant              Tenant    @relation(fields: [tenantId], references: [id])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  rawContents    RawContent[]
+  sourceMetrics  SourceMetrics?
+
+  @@map("sources")
+}
+
+model SourceMetrics {
+  id                     String   @id @default(uuid())
+  sourceId               String   @unique
+  source                 Source   @relation(fields: [sourceId], references: [id])
+  collectionSuccessRate  Float    @default(1.0)
+  avgLatencyMs           Float    @default(0)
+  eventsPerHour          Float    @default(0)
+  consecutiveFailures    Int      @default(0)
+  lastCheckedAt          DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@map("source_metrics")
+}
+
+// ─── Raw Content (M2) ─────────────────────────────────────────────────────────
+model RawContent {
+  id               String    @id @default(uuid())
+  sourceId         String
+  source           Source    @relation(fields: [sourceId], references: [id])
+  url              String?
+  title            String?
+  content          String
+  contentHash      String
+  language         String?
+  publishedAt      DateTime?
+  collectedAt      DateTime  @default(now())
+  metadataJson     Json      @default("{}")
+  processingStatus String    @default("pending")
+  processingError  String?
+  currentStage     String?
+  eventId          String?   @unique
+
+  event Event? @relation(fields: [eventId], references: [id])
+
+  @@index([sourceId])
+  @@index([contentHash])
+  @@index([processingStatus])
+  @@map("raw_contents")
+}
+
+// ─── Events (M3) ─────────────────────────────────────────────────────────────
+model Event {
+  id                    String    @id @default(uuid())
+  title                 String
+  summary               String
+  content               String?
+  classificationTitle   String    @default("fact_confirmed")
+  eventDomain           String
+  eventSubdomain        String?
+  eventStatus           String    @default("emerging")
+  confidenceLevel       Float     @default(0.5)
+  credibilityScore      Float     @default(0.5)
+  relevanceScore        Float     @default(0.5)
+  impactScore           Float     @default(0.5)
+  urgencyScore          Float     @default(0.5)
+  locationJson          Json      @default("{}")
+  occurredAt            DateTime
+  publishedAt           DateTime
+  processedAt           DateTime  @default(now())
+  involvedActorsJson    Json      @default("[]")
+  organizationsJson     Json      @default("[]")
+  sectorsImpactedJson   Json      @default("[]")
+  financialIndicators   Json?
+  cyberIndicators       Json?
+  legalReferences       Json      @default("[]")
+  relatedEventIdsJson   Json      @default("[]")
+  sourceIdsJson         Json      @default("[]")
+  primarySourceId       String
+  analystNotes          String?
+  verificationState     String    @default("unverified")
+  infoClassification    String    @default("internal")
+  provenanceChain       Json      @default("[]")
+  tagsJson              Json      @default("[]")
+  tenantId              String
+  tenant                Tenant    @relation(fields: [tenantId], references: [id])
+  createdBy             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  rawContent       RawContent?
+  entityMentions   EntityMention[]
+  scores           EventScore[]
+  narrativeProfile NarrativeProfile?
+  correlationsA    CorrelationEvent[] @relation("CorrelationEventA")
+  correlationsB    CorrelationEvent[] @relation("CorrelationEventB")
+  alerts           AlertEvent[]
+  caseEvents       CaseEvent[]
+  collectionEvents CollectionEvent[]
+
+  @@index([tenantId])
+  @@index([eventDomain])
+  @@index([eventStatus])
+  @@index([occurredAt])
+  @@index([impactScore])
+  @@map("events")
+}
+
+// ─── Entities ─────────────────────────────────────────────────────────────────
+model Entity {
+  id           String   @id @default(uuid())
+  name         String
+  type         String
+  aliases      Json     @default("[]")
+  wikidataId   String?
+  description  String?
+  countryCode  String?
+  metadataJson Json     @default("{}")
+  tenantId     String
+  createdAt    DateTime @default(now())
+
+  mentions EntityMention[]
+
+  @@index([tenantId, type])
+  @@map("entities")
+}
+
+model EntityMention {
+  id        String  @id @default(uuid())
+  eventId   String
+  entityId  String
+  role      String?
+  confidence Float  @default(1.0)
+  event     Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  entity    Entity @relation(fields: [entityId], references: [id])
+
+  @@unique([eventId, entityId])
+  @@map("entity_mentions")
+}
+
+// ─── Correlations (M4) ───────────────────────────────────────────────────────
+model Correlation {
+  id                    String    @id @default(uuid())
+  type                  String
+  strength              Float
+  rationale             String
+  supportingEvidence    Json      @default("[]")
+  alternativeHypotheses Json      @default("[]")
+  certaintyDegree       String    @default("medium")
+  humanReviewStatus     String    @default("pending")
+  reviewedBy            String?
+  reviewedAt            DateTime?
+  modelVersion          String?
+  crossDomainType       String?
+  isActive              Boolean   @default(true)
+  tenantId              String
+  tenant                Tenant    @relation(fields: [tenantId], references: [id])
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  events CorrelationEvent[]
+
+  @@index([tenantId])
+  @@index([type])
+  @@map("correlations")
+}
+
+model CorrelationEvent {
+  correlationId String
+  eventId       String
+  role          String  @default("primary")
+  correlation   Correlation @relation(fields: [correlationId], references: [id], onDelete: Cascade)
+  eventA        Event       @relation("CorrelationEventA", fields: [eventId], references: [id])
+  eventB        Event       @relation("CorrelationEventB", fields: [eventId], references: [id])
+
+  @@id([correlationId, eventId])
+  @@map("correlation_events")
+}
+
+model CorrelationRule {
+  id               String   @id @default(uuid())
+  name             String
+  description      String?
+  conditionsJson   Json
+  strength         Float    @default(0.7)
+  crossDomainType  String?
+  isActive         Boolean  @default(true)
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt        DateTime @default(now())
+
+  @@map("correlation_rules")
+}
+
+// ─── Narrative (M5) ──────────────────────────────────────────────────────────
+model NarrativeProfile {
+  id                 String   @id @default(uuid())
+  eventId            String   @unique
+  event              Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  divergenceIndex    Float    @default(0)
+  dominantThemes     Json     @default("[]")
+  polarizedTerms     Json     @default("[]")
+  coverageGaps       Json     @default("[]")
+  blocProfiles       Json     @default("[]")
+  temporalEvolution  Json     @default("[]")
+  analyzedAt         DateTime @default(now())
+  tenantId           String
+
+  @@map("narrative_profiles")
+}
+
+// ─── Scoring (M6) ────────────────────────────────────────────────────────────
+model ScoreModel {
+  id        String   @id @default(uuid())
+  version   String
+  name      String
+  weightsJson Json
+  isActive  Boolean  @default(true)
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt DateTime @default(now())
+
+  scores EventScore[]
+
+  @@unique([version, tenantId])
+  @@map("score_models")
+}
+
+model EventScore {
+  id                      String   @id @default(uuid())
+  eventId                 String
+  event                   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  modelId                 String
+  model                   ScoreModel @relation(fields: [modelId], references: [id])
+  modelVersion            String
+  geopoliticalRiskScore   Float    @default(0)
+  cyberRiskScore          Float    @default(0)
+  regulatoryRiskScore     Float    @default(0)
+  financialImpactScore    Float    @default(0)
+  supplyChainRiskScore    Float    @default(0)
+  reputationalRiskScore   Float    @default(0)
+  instabilityScore        Float    @default(0)
+  escalationScore         Float    @default(0)
+  eventPriorityScore      Float    @default(0)
+  factorDecomposition     Json     @default("{}")
+  baselineComparison      Json?
+  tenantId                String
+  computedAt              DateTime @default(now())
+
+  @@unique([eventId, modelId])
+  @@map("event_scores")
+}
+
+// ─── Alerts (M7) ─────────────────────────────────────────────────────────────
+model Alert {
+  id              String    @id @default(uuid())
+  type            String
+  severity        String    @default("medium")
+  status          String    @default("new")
+  title           String
+  summary         String
+  rationale       String
+  evidence        Json      @default("[]")
+  expectedImpact  String?
+  recommendations Json      @default("[]")
+  watchlistId     String?
+  watchlist       Watchlist? @relation(fields: [watchlistId], references: [id])
+  feedbackJson    Json?
+  recipientsJson  Json      @default("[]")
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id])
+  triggeredAt     DateTime  @default(now())
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  events AlertEvent[]
+
+  @@index([tenantId, status])
+  @@index([severity])
+  @@map("alerts")
+}
+
+model AlertEvent {
+  alertId String
+  eventId String
+  alert   Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  event   Event  @relation(fields: [eventId], references: [id])
+
+  @@id([alertId, eventId])
+  @@map("alert_events")
+}
+
+model AlertRule {
+  id               String   @id @default(uuid())
+  name             String
+  description      String?
+  type             String
+  severity         String   @default("medium")
+  conditionsJson   Json
+  cooldownMinutes  Int      @default(60)
+  isActive         Boolean  @default(true)
+  recipientIds     Json     @default("[]")
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("alert_rules")
+}
+
+model Watchlist {
+  id                 String   @id @default(uuid())
+  name               String
+  type               String
+  description        String?
+  compoundExpression String?
+  isActive           Boolean  @default(true)
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  items  WatchlistItem[]
+  alerts Alert[]
+
+  @@map("watchlists")
+}
+
+model WatchlistItem {
+  id          String    @id @default(uuid())
+  watchlistId String
+  watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  value       String
+  label       String?
+  entityId    String?
+  metadataJson Json     @default("{}")
+  createdAt   DateTime  @default(now())
+
+  @@map("watchlist_items")
+}
+
+// ─── Investigative Workspace (M8) ─────────────────────────────────────────────
+model InvestigativeCase {
+  id               String     @id @default(uuid())
+  title            String
+  description      String?
+  status           String     @default("open")
+  priority         String     @default("medium")
+  deadline         DateTime?
+  leadAnalystId    String
+  leadAnalyst      User       @relation("CaseLead", fields: [leadAnalystId], references: [id])
+  assignedIds      Json       @default("[]")
+  tagsJson         Json       @default("[]")
+  reportIdsJson    Json       @default("[]")
+  tenantId         String
+  tenant           Tenant     @relation(fields: [tenantId], references: [id])
+  createdBy        String
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  closedAt         DateTime?
+
+  events      CaseEvent[]
+  notes       CaseNote[]
+  attachments CaseAttachment[]
+  timelines   InvestigativeTimeline[]
+  dossiers    Dossier[]
+
+  @@index([tenantId, status])
+  @@map("investigative_cases")
+}
+
+model CaseEvent {
+  caseId  String
+  eventId String
+  addedBy String
+  addedAt DateTime @default(now())
+  case    InvestigativeCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  event   Event            @relation(fields: [eventId], references: [id])
+
+  @@id([caseId, eventId])
+  @@map("case_events")
+}
+
+model CaseNote {
+  id           String   @id @default(uuid())
+  caseId       String
+  case         InvestigativeCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  content      String
+  authorId     String
+  author       User     @relation(fields: [authorId], references: [id])
+  isAnalytical Boolean  @default(false)
+  tagsJson     Json     @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("case_notes")
+}
+
+model CaseAttachment {
+  id         String   @id @default(uuid())
+  caseId     String
+  case       InvestigativeCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  filename   String
+  mimeType   String
+  sizeBytes  Int
+  s3Key      String
+  uploadedBy String
+  uploadedAt DateTime @default(now())
+
+  @@map("case_attachments")
+}
+
+model InvestigativeTimeline {
+  id        String   @id @default(uuid())
+  caseId    String
+  case      InvestigativeCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  title     String
+  entriesJson Json   @default("[]")
+  tenantId  String
+  createdAt DateTime @default(now())
+
+  @@map("investigative_timelines")
+}
+
+model Dossier {
+  id                 String   @id @default(uuid())
+  caseId             String
+  case               InvestigativeCase @relation(fields: [caseId], references: [id])
+  title              String
+  sectionsJson       Json     @default("[]")
+  status             String   @default("draft")
+  infoClassification String   @default("internal")
+  tenantId           String
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("dossiers")
+}
+
+model Collection {
+  id                 String   @id @default(uuid())
+  name               String
+  description        String?
+  entityIdsJson      Json     @default("[]")
+  tagsJson           Json     @default("[]")
+  infoClassification String   @default("internal")
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  events CollectionEvent[]
+
+  @@map("collections")
+}
+
+model CollectionEvent {
+  collectionId String
+  eventId      String
+  addedAt      DateTime   @default(now())
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  event        Event      @relation(fields: [eventId], references: [id])
+
+  @@id([collectionId, eventId])
+  @@map("collection_events")
+}
+
+// ─── Reports (M10) ────────────────────────────────────────────────────────────
+model Report {
+  id                 String    @id @default(uuid())
+  type               String
+  title              String
+  status             String    @default("draft")
+  infoClassification String    @default("internal")
+  templateId         String?
+  template           ReportTemplate? @relation(fields: [templateId], references: [id])
+  sectionsJson       Json      @default("[]")
+  eventIdsJson       Json      @default("[]")
+  correlationIdsJson Json      @default("[]")
+  scoreIdsJson       Json      @default("[]")
+  caseId             String?
+  pdfS3Key           String?
+  pdfGeneratedAt     DateTime?
+  approvedBy         String?
+  approvedAt         DateTime?
+  publishedAt        DateTime?
+  tenantId           String
+  tenant             Tenant    @relation(fields: [tenantId], references: [id])
+  createdBy          String
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([tenantId, type])
+  @@map("reports")
+}
+
+model ReportTemplate {
+  id                 String   @id @default(uuid())
+  name               String
+  type               String
+  description        String?
+  defaultSections    Json     @default("[]")
+  brandingConfig     Json
+  isDefault          Boolean  @default(false)
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  createdAt          DateTime @default(now())
+
+  reports Report[]
+
+  @@map("report_templates")
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  action       String
+  resourceType String
+  resourceId   String?
+  detailsJson  Json?
+  ipAddress    String?
+  userAgent    String?
+  timestamp    DateTime @default(now())
+
+  @@index([tenantId, timestamp])
+  @@index([userId])
+  @@map("audit_logs")
+}

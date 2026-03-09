@@ -1,0 +1,194 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SENTINELA — Default Helm Values
+# Override per environment: helm upgrade sentinela . -f values-prod.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+global:
+  imageRegistry: ghcr.io/iccywolfy
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+  tenantId: default
+
+# ─── Infrastructure ───────────────────────────────────────────────────────────
+
+postgresql:
+  enabled: true
+  auth:
+    username: sentinela
+    password: sentinela
+    database: sentinela
+  primary:
+    persistence:
+      size: 20Gi
+
+elasticsearch:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  persistence:
+    size: 20Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      size: 5Gi
+
+kafka:
+  enabled: true
+  replicaCount: 1
+  persistence:
+    size: 10Gi
+
+minio:
+  enabled: true
+  auth:
+    rootUser: minioadmin
+    rootPassword: minioadmin
+  persistence:
+    size: 50Gi
+
+# ─── Application Services ─────────────────────────────────────────────────────
+
+apiGateway:
+  replicaCount: 2
+  image:
+    repository: sentinela/api-gateway
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: true
+    host: api.sentinela.local
+    tls: false
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  env:
+    JWT_SECRET: "change-in-production"
+    NODE_ENV: production
+
+ingestionService:
+  replicaCount: 2
+  image:
+    repository: sentinela/ingestion-service
+  service:
+    port: 3001
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+correlationService:
+  replicaCount: 1
+  image:
+    repository: sentinela/correlation-service
+  service:
+    port: 3002
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+alertService:
+  replicaCount: 1
+  image:
+    repository: sentinela/alert-service
+  service:
+    port: 3003
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+reportService:
+  replicaCount: 1
+  image:
+    repository: sentinela/report-service
+  service:
+    port: 3004
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+nlpService:
+  replicaCount: 1
+  image:
+    repository: sentinela/nlp-service
+  service:
+    port: 8000
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: sentinela/frontend
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: true
+    host: sentinela.local
+    tls: false
+
+# ─── Observability ────────────────────────────────────────────────────────────
+
+prometheus:
+  enabled: true
+
+grafana:
+  enabled: true
+  adminPassword: sentinela
+
+# ─── Security ─────────────────────────────────────────────────────────────────
+
+serviceAccount:
+  create: true
+  name: sentinela
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 2000
+
+# ─── Autoscaling ─────────────────────────────────────────────────────────────
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# ─── Network Policies ────────────────────────────────────────────────────────
+
+networkPolicy:
+  enabled: false
