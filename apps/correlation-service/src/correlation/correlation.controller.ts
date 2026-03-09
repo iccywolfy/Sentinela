@@ -1,41 +1,36 @@
-import { Controller, Get, Post, Param, Query, Body, Headers, Put } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { CorrelationService } from './correlation.service';
+import { ServiceAuthGuard } from '../common/guards/service-auth.guard';
 
 @ApiTags('correlations')
+@UseGuards(ServiceAuthGuard)
 @Controller('correlations')
 export class CorrelationController {
   constructor(private readonly service: CorrelationService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List correlations' })
-  findAll(@Headers('x-tenant-id') tenantId: string, @Query() filters: any) {
-    return this.service.findAll(tenantId || 'default', filters);
-  }
-
-  @Get('stats')
-  getStats(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.getStats(tenantId || 'default');
+  findAll(@Body() body: { tenantId: string }) {
+    return this.service.findAll(body.tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
+  findOne(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.findOne(id, body.tenantId);
   }
 
-  @Put(':id/review')
-  review(
-    @Param('id') id: string,
-    @Body() body: { status: string },
-    @Headers('x-tenant-id') tenantId: string,
-    @Headers('x-user-id') userId: string,
-  ) {
-    return this.service.review(id, body.status, tenantId || 'default', userId || 'system');
+  @Post('compute')
+  compute(@Body() body: { eventId: string; tenantId: string }) {
+    return this.service.computeCorrelations(body.eventId, body.tenantId);
   }
 
-  @Post('trigger')
-  @ApiOperation({ summary: 'Manually trigger correlation job' })
-  trigger(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.runCorrelationJob();
+  @Get('event/:eventId')
+  getByEvent(@Param('eventId') eventId: string, @Body() body: { tenantId: string }) {
+    return this.service.getByEvent(eventId, body.tenantId);
+  }
+
+  @Post('cross-domain')
+  analyzeCrossDomain(@Body() body: { eventIds: string[]; tenantId: string }) {
+    return this.service.analyzeCrossDomain(body.eventIds, body.tenantId);
   }
 }

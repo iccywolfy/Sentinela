@@ -1,43 +1,36 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, Headers } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiHeader } from '@nestjs/swagger';
-import { SourcesService } from './sources.service';
+import { Controller, Get, Post, Put, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { SourceService } from './source.service';
+import { ServiceAuthGuard } from '../common/guards/service-auth.guard';
 
 @ApiTags('sources')
+@UseGuards(ServiceAuthGuard)
 @Controller('sources')
 export class SourcesController {
-  constructor(private readonly sourcesService: SourcesService) {}
+  constructor(private readonly service: SourceService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Register a new data source' })
-  create(@Body() body: any, @Headers('x-tenant-id') tenantId: string) {
-    return this.sourcesService.create(body, tenantId || 'default');
+  create(@Body() body: any) {
+    return this.service.create(body, body.tenantId);
   }
 
   @Get()
-  @ApiOperation({ summary: 'List all sources' })
-  findAll(
-    @Headers('x-tenant-id') tenantId: string,
-    @Query('isActive') isActive?: string,
-    @Query('category') category?: string,
-  ) {
-    return this.sourcesService.findAll(tenantId || 'default', {
-      isActive: isActive !== undefined ? isActive === 'true' : undefined,
-      category,
-    });
+  findAll(@Body() body: { tenantId: string }) {
+    return this.service.findAll(body.tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.sourcesService.findOne(id, tenantId || 'default');
+  findOne(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.findOne(id, body.tenantId);
   }
 
   @Put(':id')
-  update(@Param('id') id: string, @Body() body: any, @Headers('x-tenant-id') tenantId: string) {
-    return this.sourcesService.update(id, body, tenantId || 'default');
+  update(@Param('id') id: string, @Body() body: any) {
+    return this.service.update(id, body, body.tenantId);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.sourcesService.remove(id, tenantId || 'default');
+  remove(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.remove(id, body.tenantId);
   }
 }

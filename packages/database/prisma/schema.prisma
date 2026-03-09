@@ -45,20 +45,30 @@ model Tenant {
   @@map("tenants")
 }
 
-// ─── User / Auth ──────────────────────────────────────────────────────────────
+// ─── User / Auth (security-by-design) ────────────────────────────────────────
 model User {
-  id              String    @id @default(uuid())
-  email           String
-  name            String
-  role            String    @default("analyst")
-  keycloakId      String?   @unique
-  isActive        Boolean   @default(true)
-  lastLoginAt     DateTime?
-  preferencesJson Json      @default("{}")
-  tenantId        String
-  tenant          Tenant    @relation(fields: [tenantId], references: [id])
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                String    @id @default(uuid())
+  email             String
+  name              String
+  fullName          String?
+  role              String    @default("analyst")
+  keycloakId        String?   @unique
+  // Security fields
+  passwordHash      String?   // bcrypt hash; null for SSO-only users
+  refreshTokenHash  String?   // SHA-256 hash of current refresh token; null = logged out
+  mfaEnabled        Boolean   @default(false)
+  mfaTotpSecret     String?   // Encrypted TOTP seed
+  status            String    @default("active") // active | disabled | invited
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime? // Account lockout expiry
+  passwordChangedAt DateTime?
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime?
+  preferencesJson   Json      @default("{}")
+  tenantId          String
+  tenant            Tenant    @relation(fields: [tenantId], references: [id])
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   teamMembers TeamMember[]
   auditLogs   AuditLog[]
@@ -66,6 +76,7 @@ model User {
   caseNotes   CaseNote[]
 
   @@unique([email, tenantId])
+  @@index([tenantId])
   @@map("users")
 }
 

@@ -1,33 +1,31 @@
-import { Controller, Get, Post, Param, Query, Headers } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { NarrativeService } from './narrative.service';
+import { ServiceAuthGuard } from '../common/guards/service-auth.guard';
 
-@ApiTags('narrative')
-@Controller('narrative')
+@ApiTags('narratives')
+@UseGuards(ServiceAuthGuard)
+@Controller('narratives')
 export class NarrativeController {
   constructor(private readonly service: NarrativeService) {}
 
   @Get()
-  findAll(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.findAll(tenantId || 'default');
+  getGlobal(@Body() body: { tenantId: string }) {
+    return this.service.getGlobalNarrativeProfile(body.tenantId);
   }
 
-  @Get('high-divergence')
-  getHighDivergence(
-    @Headers('x-tenant-id') tenantId: string,
-    @Query('minIndex') minIndex?: string,
-  ) {
-    return this.service.getHighDivergence(tenantId || 'default', minIndex ? parseFloat(minIndex) : 0.5);
+  @Post('analyze')
+  analyze(@Body() body: { tenantId: string }) {
+    return this.service.analyzeNarrativeDivergence(body.tenantId);
   }
 
-  @Get('event/:eventId')
-  findByEvent(@Param('eventId') eventId: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findByEvent(eventId, tenantId || 'default');
+  @Get('event/:eventId/framing')
+  getFraming(@Param('eventId') eventId: string, @Body() body: { tenantId: string }) {
+    return this.service.getEventFramingByBloc(eventId, body.tenantId);
   }
 
-  @Post('event/:eventId/analyze')
-  @ApiOperation({ summary: 'Trigger narrative analysis for an event' })
-  analyze(@Param('eventId') eventId: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.analyzeEvent(eventId, tenantId || 'default');
+  @Get('event/:eventId/divergence')
+  getDivergence(@Param('eventId') eventId: string, @Body() body: { tenantId: string }) {
+    return this.service.getEventDivergenceIndex(eventId, body.tenantId);
   }
 }

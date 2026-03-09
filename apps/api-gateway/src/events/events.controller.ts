@@ -1,16 +1,22 @@
-import { Controller, Get, Param, Query, Headers, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { AuthGuard } from '@nestjs/passport';
 import { EventsService } from './events.service';
+import { CurrentUser, JwtUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('events')
+@ApiBearerAuth()
+@UseGuards(AuthGuard('jwt'))
 @Controller('events')
 export class EventsController {
   constructor(private readonly service: EventsService) {}
 
   @Get()
+  @Roles('viewer', 'analyst', 'senior_analyst', 'director', 'admin')
   @ApiOperation({ summary: 'Search and filter events' })
   search(
-    @Headers('x-tenant-id') tenantId: string,
+    @CurrentUser() user: JwtUser,
     @Query('q') q: string,
     @Query('domains') domains: string,
     @Query('countries') countries: string,
@@ -29,16 +35,26 @@ export class EventsController {
       dateTo,
       minImpact,
     };
-    return this.service.search(q || '', filters, tenantId || 'default', parseInt(page || '1'), parseInt(pageSize || '20'));
+    return this.service.search(
+      q || '',
+      filters,
+      user.tenantId,
+      parseInt(page || '1', 10),
+      Math.min(parseInt(pageSize || '20', 10), 100),
+    );
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
+  @Roles('viewer', 'analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'Get event by ID' })
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.service.findOne(id, user.tenantId);
   }
 
   @Get(':id/related')
-  findRelated(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findRelated(id, tenantId || 'default');
+  @Roles('viewer', 'analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'Get related events' })
+  findRelated(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.service.findRelated(id, user.tenantId);
   }
 }

@@ -1,41 +1,41 @@
-import { Controller, Get, Post, Put, Param, Body, Headers, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { ReportService } from './report.service';
+import { ServiceAuthGuard } from '../common/guards/service-auth.guard';
 
 @ApiTags('reports')
+@UseGuards(ServiceAuthGuard)
 @Controller('reports')
 export class ReportController {
   constructor(private readonly service: ReportService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Generate a new intelligence report' })
-  generate(@Body() body: any, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.generate(body, tenantId || 'default', userId || 'system');
+  create(@Body() body: any) {
+    return this.service.createReport(body, body.tenantId, body.userId);
   }
 
   @Get()
-  findAll(@Headers('x-tenant-id') tenantId: string, @Query() filters: any) {
-    return this.service.findAll(tenantId || 'default', filters);
+  findAll(@Body() body: { tenantId: string }) {
+    return this.service.findAll(body.tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
+  findOne(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.findOne(id, body.tenantId);
   }
 
   @Get(':id/download')
-  @ApiOperation({ summary: 'Get presigned download URL for PDF' })
-  getDownloadUrl(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.getDownloadUrl(id, tenantId || 'default');
+  download(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.getDownloadUrl(id, body.tenantId);
   }
 
-  @Put(':id/approve')
-  approve(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.approve(id, userId || 'system', tenantId || 'default');
+  @Post(':id/regenerate')
+  regenerate(@Param('id') id: string, @Body() body: { tenantId: string; userId: string }) {
+    return this.service.regenerate(id, body.tenantId, body.userId);
   }
 
-  @Put(':id/publish')
-  publish(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.publish(id, tenantId || 'default');
+  @Delete(':id')
+  delete(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.delete(id, body.tenantId);
   }
 }

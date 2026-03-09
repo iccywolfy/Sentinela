@@ -1,33 +1,41 @@
-import { Controller, Get, Post, Delete, Param, Body, Headers } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { CollectionService } from './collection.service';
+import { CurrentUser, JwtUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('workspace/collections')
+@ApiBearerAuth()
 @Controller('workspace/collections')
 export class CollectionController {
   constructor(private readonly service: CollectionService) {}
 
   @Post()
-  create(@Body() body: any, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.create(body, tenantId || 'default', userId || 'system');
+  @Roles('analyst')
+  create(@Body() body: any, @CurrentUser() user: JwtUser) {
+    return this.service.create(body, user.tenantId, user.id);
   }
 
   @Get()
-  findAll(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.findAll(tenantId || 'default');
+  @Roles('viewer')
+  findAll(@CurrentUser() user: JwtUser) {
+    return this.service.findAll(user.tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
+  @Roles('viewer')
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.service.findOne(id, user.tenantId);
   }
 
   @Post(':id/events')
+  @Roles('analyst')
   addEvent(@Param('id') id: string, @Body() body: { eventId: string }) {
     return this.service.addEvent(id, body.eventId);
   }
 
   @Delete(':id/events/:eventId')
+  @Roles('analyst')
   removeEvent(@Param('id') id: string, @Param('eventId') eventId: string) {
     return this.service.removeEvent(id, eventId);
   }

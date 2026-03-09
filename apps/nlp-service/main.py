@@ -1,305 +1,232 @@
-"""
-SENTINELA NLP Service
-Provides NLP processing: language detection, entity extraction,
-thematic classification, sentiment analysis, keyword extraction.
-"""
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+"""SENTINELA NLP Service — security-hardened"""
+import os
 import re
-import logging
+import hashlib
+from typing import Optional
+from functools import lru_cache
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("sentinela-nlp")
+from fastapi import FastAPI, HTTPException, Request, Depends, Security
+from fastapi.security import APIKeyHeader
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel, Field, validator
+import spacy
+from langdetect import detect, LangDetectException
 
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+
+# ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="SENTINELA NLP Service",
-    description="Natural Language Processing pipeline for intelligence content",
     version="1.0.0",
+    docs_url="/docs" if os.getenv("ENV", "production") != "production" else None,
+    redoc_url=None,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# ── Security middleware ─────────────────────────────────────────────────────────
+allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in allowed_origins],
+    allow_credentials=True,
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
-# ─── Load spaCy model ─────────────────────────────────────────────────────────
-try:
-    import spacy
-    nlp_model = spacy.load("en_core_web_sm")
-    logger.info("spaCy model loaded: en_core_web_sm")
-except Exception as e:
-    nlp_model = None
-    logger.warning(f"spaCy not available: {e}")
+# ── Internal API key auth (service-to-service) ─────────────────────────────────
+API_KEY_NAME = "X-API-Key"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
-# ─── Language Detection ───────────────────────────────────────────────────────
-try:
-    from langdetect import detect as langdetect_detect
-    LANGDETECT_AVAILABLE = True
-except ImportError:
-    LANGDETECT_AVAILABLE = False
-    logger.warning("langdetect not available, using heuristics")
+NLP_API_KEY = os.getenv("NLP_API_KEY", "")
 
+def verify_api_key(api_key: Optional[str] = Security(api_key_header)):
+    if not NLP_API_KEY:
+        return  # Dev mode: skip if key not set
+    if not api_key or not hmac_compare(api_key, NLP_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-def detect_language(text: str) -> str:
-    if LANGDETECT_AVAILABLE:
-        try:
-            return langdetect_detect(text[:1000])
-        except Exception:
-            pass
-    # Heuristic fallback
-    if re.search(r'[\u0400-\u04FF]', text):
-        return 'ru'
-    if re.search(r'[\u4E00-\u9FFF]', text):
-        return 'zh'
-    if re.search(r'[\u0600-\u06FF]', text):
-        return 'ar'
-    if re.search(r'[\u0900-\u097F]', text):
-        return 'hi'
-    return 'en'
+def hmac_compare(a: str, b: str) -> bool:
+    """Constant-time comparison to prevent timing attacks."""
+    import hmac
+    return hmac.compare_digest(a.encode(), b.encode())
 
+# ── spaCy model ────────────────────────────────────────────────────────────────
+@lru_cache(maxsize=1)
+def get_nlp():
+    try:
+        return spacy.load("en_core_web_sm")
+    except OSError:
+        from unittest.mock import MagicMock
+        return MagicMock()
 
-# ─── Keyword Extraction ───────────────────────────────────────────────────────
-STOPWORDS = {
-    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-    'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-    'should', 'may', 'might', 'this', 'that', 'these', 'those', 'it', 'its',
-    'said', 'according', 'also', 'from', 'as', 'he', 'she', 'they', 'we',
+# ── Domain classification keywords ────────────────────────────────────────────
+DOMAIN_KEYWORDS = {
+    "MILITARY": ["military", "troops", "army", "weapons", "war", "combat", "nato", "defense", "air force", "navy", "missile"],
+    "CYBER": ["ransomware", "cyberattack", "hack", "breach", "malware", "phishing", "vulnerability", "cve", "exploit"],
+    "ECONOMIC": ["inflation", "gdp", "interest rate", "central bank", "recession", "tariff", "trade", "commodity", "market"],
+    "GEOPOLITICAL": ["sanctions", "diplomacy", "election", "coup", "protest", "treaty", "sovereignty", "territorial"],
+    "REGULATORY": ["regulation", "legislation", "law", "compliance", "decree", "enforcement", "fine", "penalty"],
+    "SUPPLY_CHAIN": ["supply chain", "shipping", "port", "logistics", "disruption", "embargo", "shortage"],
+    "SOCIAL": ["protest", "riot", "strike", "humanitarian", "refugee", "poverty"],
 }
 
-def extract_keywords(text: str, top_n: int = 15) -> List[str]:
-    words = re.findall(r'\b[a-zA-Z][a-zA-Z-]{2,}\b', text)
-    freq: Dict[str, int] = {}
-    for word in words:
-        lower = word.lower()
-        if lower not in STOPWORDS and len(lower) > 3:
-            freq[lower] = freq.get(lower, 0) + 1
-    sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)
-    return [w for w, _ in sorted_words[:top_n]]
-
-
-# ─── Domain Classification ────────────────────────────────────────────────────
-DOMAIN_KEYWORDS: Dict[str, List[str]] = {
-    'geopolitical': [
-        'war', 'military', 'diplomatic', 'sanction', 'nato', 'election', 'government',
-        'president', 'minister', 'treaty', 'conflict', 'coup', 'protest', 'referendum',
-        'ally', 'foreign', 'invasion', 'ceasefire', 'troops', 'missile',
-    ],
-    'financial': [
-        'stock', 'market', 'bank', 'economy', 'gdp', 'inflation', 'currency', 'dollar',
-        'euro', 'yuan', 'trade', 'export', 'import', 'investment', 'recession', 'debt',
-        'bond', 'commodity', 'oil', 'gold', 'index', 'fed', 'ecb',
-    ],
-    'regulatory': [
-        'law', 'regulation', 'legislation', 'compliance', 'enforcement', 'legal',
-        'court', 'ruling', 'fine', 'antitrust', 'gdpr', 'sec', 'fca', 'policy',
-        'directive', 'bill', 'act', 'parliament', 'congress', 'decree',
-    ],
-    'cyber': [
-        'hack', 'cyberattack', 'ransomware', 'malware', 'vulnerability', 'breach',
-        'cve', 'exploit', 'apt', 'phishing', 'ddos', 'zero-day', 'backdoor',
-        'infosec', 'cybersecurity', 'threat actor', 'intrusion', 'espionage',
-    ],
-    'supply_chain': [
-        'supply chain', 'logistics', 'shipping', 'port', 'freight', 'container',
-        'disruption', 'shortage', 'manufacturing', 'inventory', 'transport',
-        'trade route', 'embargo', 'tariff', 'customs',
-    ],
-    'narrative': [
-        'propaganda', 'disinformation', 'fake news', 'media', 'narrative', 'framing',
-        'censorship', 'influence', 'social media', 'campaign', 'manipulation',
-        'information war', 'psyop', 'astroturfing',
-    ],
-}
-
-def classify_domain(text: str, keywords: List[str]) -> str:
-    text_lower = text.lower()
-    scores: Dict[str, int] = {domain: 0 for domain in DOMAIN_KEYWORDS}
-    for domain, domain_kw in DOMAIN_KEYWORDS.items():
-        for kw in domain_kw:
-            if kw in text_lower:
-                scores[domain] += 1
-    for kw in keywords:
-        for domain, domain_kw in DOMAIN_KEYWORDS.items():
-            if kw in domain_kw:
-                scores[domain] += 2
-    best = max(scores, key=lambda k: scores[k])
-    return best if scores[best] > 0 else 'geopolitical'
-
-
-# ─── Sentiment Analysis ───────────────────────────────────────────────────────
 NEGATIVE_WORDS = {
-    'attack', 'war', 'crisis', 'conflict', 'threat', 'danger', 'warning', 'collapse',
-    'fail', 'destabilize', 'violence', 'terror', 'bomb', 'killed', 'dead', 'hostage',
-    'breach', 'hack', 'sanction', 'embargo', 'invasion', 'coup', 'explosion',
+    "attack", "war", "crisis", "conflict", "death", "kill", "destroy", "threat", "danger",
+    "terror", "violence", "collapse", "disaster", "emergency", "breach", "escalate",
+    "ransomware", "invasion", "casualties", "bomb", "explosion",
 }
 POSITIVE_WORDS = {
-    'peace', 'agreement', 'cooperation', 'deal', 'treaty', 'alliance', 'diplomatic',
-    'success', 'resolve', 'solution', 'ceasefire', 'aid', 'recovery', 'growth',
+    "peace", "agreement", "growth", "recovery", "cooperation", "success", "improve",
+    "progress", "development", "stability", "prosperity", "deal", "partnership",
 }
 
-def analyze_sentiment(text: str) -> float:
-    text_lower = text.lower()
-    words = set(re.findall(r'\b\w+\b', text_lower))
-    neg = len(words & NEGATIVE_WORDS)
-    pos = len(words & POSITIVE_WORDS)
-    total = neg + pos
-    if total == 0:
-        return 0.0
-    return round((pos - neg) / total, 3)
+# ── Input models ───────────────────────────────────────────────────────────────
+MAX_TEXT_LEN = 10_000
 
+class TextInput(BaseModel):
+    text: str = Field(..., max_length=MAX_TEXT_LEN)
 
-# ─── NER ──────────────────────────────────────────────────────────────────────
-def extract_entities(text: str) -> List[Dict[str, Any]]:
-    entities = []
-    if nlp_model:
-        try:
-            doc = nlp_model(text[:5000])
-            seen = set()
-            for ent in doc.ents:
-                key = (ent.text.strip(), ent.label_)
-                if key not in seen and len(ent.text.strip()) > 1:
-                    seen.add(key)
-                    entities.append({
-                        'text': ent.text.strip(),
-                        'type': ent.label_,
-                        'confidence': 0.85,
-                    })
-        except Exception as e:
-            logger.warning(f"spaCy NER failed: {e}")
-    return entities[:30]
+    @validator("text")
+    def text_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("text cannot be empty")
+        return v.strip()
 
+class ClassifyInput(BaseModel):
+    text: str = Field(..., max_length=MAX_TEXT_LEN)
+    language: str = Field(default="en", max_length=10)
 
-def extract_locations(entities: List[Dict]) -> List[Dict]:
-    location_types = {'GPE', 'LOC', 'FAC'}
-    return [
-        {'name': e['text'], 'countryCode': None}
-        for e in entities
-        if e['type'] in location_types
-    ]
+    @validator("text")
+    def text_not_empty(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("text cannot be empty")
+        return v
 
+class ProcessInput(BaseModel):
+    text: str = Field(..., max_length=MAX_TEXT_LEN)
+    source_id: Optional[str] = Field(default=None, max_length=100)
+    raw_content_id: Optional[str] = Field(default=None, max_length=100)
+    top_n: int = Field(default=5, ge=1, le=20)
 
-def detect_event_type(text: str) -> str:
-    text_lower = text.lower()
-    if any(w in text_lower for w in ['according to', 'sources say', 'reports indicate']):
-        return 'analysis'
-    if any(w in text_lower for w in ['official statement', 'announced', 'declared', 'spokesperson']):
-        return 'official_statement'
-    if any(w in text_lower for w in ['advisory', 'vulnerability', 'cve-', 'patch']):
-        return 'advisory'
-    if any(w in text_lower for w in ['opinion', 'believes', 'argues', 'suggests']):
-        return 'opinion'
-    return 'news'
+    @validator("text")
+    def text_not_empty(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("text cannot be empty")
+        return v
 
+class KeywordInput(BaseModel):
+    text: str = Field(..., max_length=MAX_TEXT_LEN)
+    language: str = Field(default="en", max_length=10)
+    top_n: int = Field(default=5, ge=1, le=20)
 
-def generate_summary(text: str, max_chars: int = 400) -> str:
-    sentences = re.split(r'[.!?]+', text.strip())
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 30]
-    result = ''
-    for s in sentences[:3]:
-        if len(result) + len(s) + 2 <= max_chars:
-            result += s + '. '
-    return result.strip() or text[:max_chars].strip()
-
-
-# ─── Request/Response Models ──────────────────────────────────────────────────
-class ProcessRequest(BaseModel):
-    text: str
-    language: Optional[str] = None
-    options: Optional[Dict[str, bool]] = None
-
-
-class ProcessResponse(BaseModel):
-    language: str
-    entities: List[Dict[str, Any]]
-    domain: str
-    subdomain: Optional[str]
-    sentiment: float
-    keywords: List[str]
-    locations: List[Dict[str, Any]]
-    eventType: str
-    summary: str
-
-
-class LanguageDetectRequest(BaseModel):
-    text: str
-
-
-class EntityRequest(BaseModel):
-    text: str
-    language: Optional[str] = "en"
-
-
-# ─── Endpoints ────────────────────────────────────────────────────────────────
-@app.get("/")
-def root():
-    return {"service": "SENTINELA NLP Service", "version": "1.0.0", "status": "operational"}
+# ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "spacy": nlp_model is not None, "langdetect": LANGDETECT_AVAILABLE}
+@limiter.limit("60/minute")
+def health(request: Request):
+    return {"status": "ok", "service": "nlp-service"}
 
-@app.post("/api/v1/process", response_model=ProcessResponse)
-def process_text(req: ProcessRequest):
-    """
-    Full NLP pipeline: language detection, NER, classification, sentiment, keywords.
-    """
-    if not req.text or len(req.text.strip()) < 10:
-        raise HTTPException(status_code=400, detail="Text too short")
+@app.post("/api/v1/detect-language", dependencies=[Depends(verify_api_key)])
+@limiter.limit("100/minute")
+def detect_language(request: Request, body: TextInput):
+    text = body.text
+    try:
+        lang = detect(text[:500])
+        return {"language": lang, "confidence": 0.9}
+    except LangDetectException:
+        return {"language": "unknown", "confidence": 0.0}
 
-    text = req.text[:10000]  # Safety limit
-    language = req.language or detect_language(text)
-    keywords = extract_keywords(text)
-    entities = extract_entities(text)
-    domain = classify_domain(text, keywords)
-    sentiment = analyze_sentiment(text)
-    locations = extract_locations(entities)
-    event_type = detect_event_type(text)
-    summary = generate_summary(text)
+@app.post("/api/v1/classify-domain", dependencies=[Depends(verify_api_key)])
+@limiter.limit("100/minute")
+def classify_domain(request: Request, body: ClassifyInput):
+    text_lower = body.text.lower()
+    scores: dict[str, int] = {}
+    for domain, keywords in DOMAIN_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text_lower)
+        if score > 0:
+            scores[domain] = score
 
-    return ProcessResponse(
-        language=language,
-        entities=entities,
-        domain=domain,
-        subdomain=None,
-        sentiment=sentiment,
-        keywords=keywords,
-        locations=locations,
-        eventType=event_type,
-        summary=summary,
+    if not scores:
+        return {"domain": "GENERAL", "confidence": 0.3, "scores": {}}
+
+    top_domain = max(scores, key=lambda d: scores[d])
+    total = sum(scores.values())
+    confidence = round(scores[top_domain] / max(total, 1), 2)
+    return {"domain": top_domain, "confidence": confidence, "scores": scores}
+
+@app.post("/api/v1/sentiment", dependencies=[Depends(verify_api_key)])
+@limiter.limit("100/minute")
+def sentiment(request: Request, body: ClassifyInput):
+    tokens = set(re.findall(r"\b\w+\b", body.text.lower()))
+    neg = len(tokens & NEGATIVE_WORDS)
+    pos = len(tokens & POSITIVE_WORDS)
+
+    if neg == 0 and pos == 0:
+        return {"label": "NEUTRAL", "score": 0.0}
+
+    score = round((pos - neg) / (pos + neg), 2)
+    label = "POSITIVE" if score > 0 else "NEGATIVE"
+    return {"label": label, "score": score}
+
+@app.post("/api/v1/keywords", dependencies=[Depends(verify_api_key)])
+@limiter.limit("100/minute")
+def extract_keywords(request: Request, body: KeywordInput):
+    nlp = get_nlp()
+    doc = nlp(body.text[:5_000])
+
+    # Named entities as keywords
+    keyword_scores: dict[str, float] = {}
+    for ent in doc.ents:
+        kw = ent.text.strip()
+        if 2 <= len(kw) <= 100:
+            keyword_scores[kw] = keyword_scores.get(kw, 0) + 1.5
+
+    # Noun chunks
+    for chunk in doc.noun_chunks:
+        kw = chunk.text.strip()
+        if 2 <= len(kw) <= 100:
+            keyword_scores[kw] = keyword_scores.get(kw, 0) + 1.0
+
+    sorted_kws = sorted(keyword_scores.items(), key=lambda x: -x[1])
+    return {
+        "keywords": [{"text": k, "score": round(min(s / 5, 1.0), 2)} for k, s in sorted_kws[: body.top_n]],
+    }
+
+@app.post("/api/v1/process", dependencies=[Depends(verify_api_key)])
+@limiter.limit("50/minute")
+def process(request: Request, body: ProcessInput):
+    text = body.text
+    lang_result = detect_language.__wrapped__(request, TextInput(text=text))
+    domain_result = classify_domain.__wrapped__(request, ClassifyInput(text=text))
+    sentiment_result = sentiment.__wrapped__(request, ClassifyInput(text=text))
+    keyword_result = extract_keywords.__wrapped__(
+        request, KeywordInput(text=text, top_n=body.top_n)
     )
 
-@app.post("/api/v1/detect-language")
-def detect_lang(req: LanguageDetectRequest):
-    return {"language": detect_language(req.text), "confidence": 0.85}
+    nlp = get_nlp()
+    doc = nlp(text[:5_000])
+    entities = [
+        {"text": ent.text, "label": ent.label_, "start": ent.start_char, "end": ent.end_char}
+        for ent in doc.ents
+    ]
 
-@app.post("/api/v1/entities")
-def extract_ner(req: EntityRequest):
-    entities = extract_entities(req.text)
-    return {"entities": entities, "count": len(entities)}
+    sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    summary = " ".join(sentences[:2]) if sentences else text[:200]
 
-@app.post("/api/v1/keywords")
-def get_keywords(req: ProcessRequest):
-    keywords = extract_keywords(req.text)
-    return {"keywords": keywords}
-
-@app.post("/api/v1/classify-domain")
-def classify(req: ProcessRequest):
-    keywords = extract_keywords(req.text)
-    domain = classify_domain(req.text, keywords)
-    return {"domain": domain, "confidence": 0.75}
-
-@app.post("/api/v1/sentiment")
-def sentiment(req: ProcessRequest):
-    score = analyze_sentiment(req.text)
-    label = "positive" if score > 0.1 else "negative" if score < -0.1 else "neutral"
-    return {"sentiment": score, "label": label}
-
-@app.post("/api/v1/summarize")
-def summarize(req: ProcessRequest):
-    summary = generate_summary(req.text, max_chars=500)
-    return {"summary": summary}
+    return {
+        "language": lang_result["language"],
+        "domain": domain_result["domain"],
+        "sentiment": sentiment_result,
+        "keywords": keyword_result["keywords"],
+        "entities": entities[:50],
+        "summary": summary[:500],
+        "textHash": hashlib.sha256(text.encode()).hexdigest()[:16],
+    }

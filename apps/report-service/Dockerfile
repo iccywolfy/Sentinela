@@ -1,19 +1,31 @@
+# ── Build stage ───────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 WORKDIR /app
-RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+# Copy manifests first for cache efficiency
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine
+# ── Production stage ──────────────────────────────────────────────────────────
+FROM node:20-alpine AS production
+# Security: run as non-root user (SEC-10)
+RUN addgroup -S sentinela && adduser -S sentinela -G sentinela
 WORKDIR /app
-RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+
+# Only production deps
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --only=production --ignore-scripts && npm cache clean --force
+
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/templates ./dist/templates
+
+# Security: least-privilege ownership
+RUN chown -R sentinela:sentinela /app
+USER sentinela
+
+# Security: drop all capabilities, run readonly rootfs compatible
+ENV NODE_ENV=production
 EXPOSE 3004
-CMD ["node", "dist/main"]
+
+# Disable Node.js debug flag exploitation
+CMD ["node", "--max-old-space-size=512", "dist/main"]

@@ -1,9 +1,12 @@
-import { Controller, Get, Post, Param, Query, Headers } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Param, Query } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ScoringService } from './scoring.service';
 import { ExplainabilityService } from './explainability.service';
+import { CurrentUser, JwtUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
 
 @ApiTags('scoring')
+@ApiBearerAuth()
 @Controller('scoring')
 export class ScoringController {
   constructor(
@@ -12,28 +15,33 @@ export class ScoringController {
   ) {}
 
   @Get('country-scoreboard')
-  getCountryScoreboard(@Headers('x-tenant-id') tenantId: string) {
-    return this.scoringService.getCountryScoreboard(tenantId || 'default');
+  @Roles('viewer')
+  getCountryScoreboard(@CurrentUser() user: JwtUser) {
+    return this.scoringService.getCountryScoreboard(user.tenantId);
   }
 
   @Get('models')
-  getModels(@Headers('x-tenant-id') tenantId: string) {
-    return this.scoringService.getModels(tenantId || 'default');
+  @Roles('viewer')
+  getModels(@CurrentUser() user: JwtUser) {
+    return this.scoringService.getModels(user.tenantId);
   }
 
   @Get('event/:eventId')
-  getEventScores(@Param('eventId') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.scoringService.getEventScores(id, tenantId || 'default');
+  @Roles('viewer')
+  getEventScores(@Param('eventId') id: string, @CurrentUser() user: JwtUser) {
+    return this.scoringService.getEventScores(id, user.tenantId);
   }
 
   @Get('event/:eventId/explain')
+  @Roles('viewer')
   @ApiOperation({ summary: 'Get explainability breakdown for event scores' })
-  explainScore(@Param('eventId') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.explainabilityService.explainScore(id, tenantId || 'default');
+  explainScore(@Param('eventId') id: string, @CurrentUser() user: JwtUser) {
+    return this.explainabilityService.explainScore(id, user.tenantId);
   }
 
   @Post('event/:eventId/compute')
-  scoreEvent(@Param('eventId') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.scoringService.scoreEvent(id, tenantId || 'default');
+  @Roles('analyst')
+  scoreEvent(@Param('eventId') id: string, @CurrentUser() user: JwtUser) {
+    return this.scoringService.scoreEvent(id, user.tenantId);
   }
 }

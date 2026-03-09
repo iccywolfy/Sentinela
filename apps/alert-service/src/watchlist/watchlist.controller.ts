@@ -1,39 +1,36 @@
-import { Controller, Get, Post, Delete, Param, Body, Headers } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { WatchlistService } from './watchlist.service';
+import { ServiceAuthGuard } from '../common/guards/service-auth.guard';
 
 @ApiTags('watchlists')
+@UseGuards(ServiceAuthGuard)
 @Controller('watchlists')
 export class WatchlistController {
   constructor(private readonly service: WatchlistService) {}
 
   @Post()
-  create(@Body() body: any, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.create(body, tenantId || 'default', userId || 'system');
+  create(@Body() body: any) {
+    return this.service.create(body, body.tenantId, body.userId);
   }
 
   @Get()
-  findAll(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.findAll(tenantId || 'default');
+  findAll(@Body() body: { tenantId: string }) {
+    return this.service.findAll(body.tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
+  findOne(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.findOne(id, body.tenantId);
   }
 
-  @Post(':id/items')
-  addItem(@Param('id') id: string, @Body() body: any, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.addItem(id, body, tenantId || 'default');
-  }
-
-  @Delete(':id/items/:itemId')
-  removeItem(@Param('id') id: string, @Param('itemId') itemId: string) {
-    return this.service.removeItem(id, itemId);
+  @Put(':id')
+  update(@Param('id') id: string, @Body() body: any) {
+    return this.service.update(id, body, body.tenantId);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.remove(id, tenantId || 'default');
+  delete(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.delete(id, body.tenantId);
   }
 }

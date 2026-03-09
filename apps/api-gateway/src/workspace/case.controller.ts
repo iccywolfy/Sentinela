@@ -1,49 +1,91 @@
-import { Controller, Get, Post, Put, Param, Body, Query, Headers } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import {
+  Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, HttpCode, HttpStatus,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { IsString, IsOptional, IsIn } from 'class-validator';
 import { CaseService } from './case.service';
+import { CurrentUser, JwtUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
 
-@ApiTags('workspace/cases')
+class CreateCaseDto {
+  @IsString()
+  title: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsIn(['low', 'medium', 'high', 'critical'])
+  priority?: string;
+}
+
+class AddEventDto {
+  @IsString()
+  eventId: string;
+}
+
+class AddNoteDto {
+  @IsString()
+  content: string;
+}
+
+@ApiTags('workspace')
+@ApiBearerAuth()
+@UseGuards(AuthGuard('jwt'))
 @Controller('workspace/cases')
 export class CaseController {
-  constructor(private readonly service: CaseService) {}
-
-  @Post()
-  create(@Body() body: any, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.create(body, tenantId || 'default', userId || 'system');
-  }
+  constructor(private readonly caseService: CaseService) {}
 
   @Get()
-  findAll(@Headers('x-tenant-id') tenantId: string, @Query() filters: any) {
-    return this.service.findAll(tenantId || 'default', filters);
+  @Roles('analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'List investigation cases for current tenant' })
+  findAll(@CurrentUser() user: JwtUser) {
+    return this.caseService.findAll(user.tenantId);
+  }
+
+  @Post()
+  @Roles('analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'Create a new investigation case' })
+  create(@Body() dto: CreateCaseDto, @CurrentUser() user: JwtUser) {
+    return this.caseService.create(dto, user.tenantId, user.id);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
-  }
-
-  @Put(':id')
-  update(@Param('id') id: string, @Body() body: any, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.update(id, body, tenantId || 'default');
+  @Roles('analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'Get case details' })
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.caseService.findOne(id, user.tenantId);
   }
 
   @Post(':id/events')
-  addEvent(@Param('id') id: string, @Body() body: { eventId: string }, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.addEvent(id, body.eventId, userId || 'system', tenantId || 'default');
+  @Roles('analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'Link an event to a case' })
+  addEvent(
+    @Param('id') id: string,
+    @Body() dto: AddEventDto,
+    @CurrentUser() user: JwtUser,
+  ) {
+    return this.caseService.addEvent(id, dto.eventId, user.tenantId, user.id);
   }
 
   @Post(':id/notes')
-  addNote(@Param('id') id: string, @Body() body: { content: string; isAnalytical?: boolean }, @Headers('x-tenant-id') tenantId: string, @Headers('x-user-id') userId: string) {
-    return this.service.addNote(id, body.content, body.isAnalytical || false, userId || 'system', tenantId || 'default');
+  @Roles('analyst', 'senior_analyst', 'director', 'admin')
+  @ApiOperation({ summary: 'Add a note to a case' })
+  addNote(
+    @Param('id') id: string,
+    @Body() dto: AddNoteDto,
+    @CurrentUser() user: JwtUser,
+  ) {
+    return this.caseService.addNote(id, dto.content, user.tenantId, user.id);
   }
 
-  @Get(':id/timeline')
-  getTimeline(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.getTimeline(id, tenantId || 'default');
-  }
-
-  @Post(':id/timeline')
-  createTimeline(@Param('id') id: string, @Body() body: any, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.createTimeline(id, body, tenantId || 'default');
+  @Patch(':id/close')
+  @Roles('senior_analyst', 'director', 'admin')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Close a case' })
+  close(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.caseService.close(id, user.tenantId, user.id);
   }
 }

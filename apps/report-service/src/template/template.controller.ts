@@ -1,29 +1,31 @@
-import { Controller, Get, Post, Param, Body, Headers } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, Body, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { TemplateService } from './template.service';
+import { ServiceAuthGuard } from '../common/guards/service-auth.guard';
 
-@ApiTags('templates')
-@Controller('templates')
+@ApiTags('report-templates')
+@UseGuards(ServiceAuthGuard)
+@Controller('report-templates')
 export class TemplateController {
   constructor(private readonly service: TemplateService) {}
 
   @Get()
-  findAll(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.findAll(tenantId || 'default');
+  findAll(@Body() body: { tenantId: string }) {
+    return this.service.findAll(body.tenantId);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.findOne(id, tenantId || 'default');
+  findOne(@Param('id') id: string, @Body() body: { tenantId: string }) {
+    return this.service.findOne(id, body.tenantId);
   }
 
   @Post()
-  create(@Body() body: any, @Headers('x-tenant-id') tenantId: string) {
-    return this.service.create(body, tenantId || 'default');
+  create(@Body() body: any) {
+    return this.service.create(body, body.tenantId);
   }
 
-  @Post('seed')
-  seed(@Headers('x-tenant-id') tenantId: string) {
-    return this.service.seedDefaults(tenantId || 'default');
+  @Put(':id')
+  update(@Param('id') id: string, @Body() body: any) {
+    return this.service.update(id, body, body.tenantId);
   }
 }
