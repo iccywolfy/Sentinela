@@ -1,0 +1,45 @@
+{{- if gt (int .Values.apiGateway.replicaCount) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-api-gateway-pdb
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "sentinela.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api-gateway
+{{- end }}
+{{- if gt (int .Values.ingestionService.replicaCount) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-ingestion-pdb
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "sentinela.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ingestion-service
+{{- end }}
+{{- if gt (int .Values.frontend.replicaCount) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-frontend-pdb
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "sentinela.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+{{- end }}

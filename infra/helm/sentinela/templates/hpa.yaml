@@ -1,0 +1,40 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $services := dict
+  "api-gateway" .Values.apiGateway.replicaCount
+  "ingestion-service" .Values.ingestionService.replicaCount
+  "correlation-service" .Values.correlationService.replicaCount
+  "alert-service" .Values.alertService.replicaCount
+  "report-service" .Values.reportService.replicaCount
+  "frontend" .Values.frontend.replicaCount
+}}
+{{- range $name, $_ := $services }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  labels:
+    {{- include "sentinela.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $.Release.Name }}-{{ $name }}
+  minReplicas: {{ $.Values.autoscaling.minReplicas }}
+  maxReplicas: {{ $.Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+{{- end }}
+{{- end }}

@@ -1,0 +1,87 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+# Allow frontend → api-gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-frontend-to-api
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api-gateway
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: frontend
+      ports:
+        - port: {{ .Values.apiGateway.service.port }}
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: {{ .Values.apiGateway.service.port }}
+---
+# Allow api-gateway to call all backend services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-api-to-services
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sentinela.selectorLabels" . | nindent 6 }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api-gateway
+---
+# Allow all app services to reach infrastructure (postgres, redis, kafka, ES, minio)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-apps-to-infra
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sentinela.selectorLabels" . | nindent 6 }}
+  egress:
+    - ports:
+        - port: 5432    # PostgreSQL
+        - port: 6379    # Redis
+        - port: 9092    # Kafka
+        - port: 9200    # Elasticsearch
+        - port: 9000    # MinIO
+        - port: 8000    # NLP Service
+        - port: 53      # DNS
+      protocol: TCP
+    - ports:
+        - port: 53
+      protocol: UDP
+---
+# Deny all ingress to infrastructure pods except from app services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-restrict-infra-access
+  labels:
+    {{- include "sentinela.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      release: {{ .Release.Name }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "sentinela.selectorLabels" . | nindent 14 }}
+{{- end }}
